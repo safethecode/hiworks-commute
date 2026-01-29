@@ -28,7 +28,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../scripts/playwright-worker.js": "scripts/playwright-worker.js"
+      "../scripts/bundle": "bundle"
     },
     "macOS": {
       "minimumSystemVersion": "10.15"

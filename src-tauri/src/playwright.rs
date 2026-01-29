@@ -7,6 +7,59 @@ use thiserror::Error;
 
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+/// 번들 디렉토리를 찾습니다 (node, browsers, playwright-worker.js 포함)
+fn find_bundle_dir() -> Option<PathBuf> {
+    let exe_path = std::env::current_exe().ok()?;
+    let exe_dir = exe_path.parent()?;
+
+    // 앱 번들 내 Resources/bundle
+    let bundle_in_app = exe_dir.join("../Resources/bundle");
+    if bundle_in_app.exists() {
+        return bundle_in_app.canonicalize().ok();
+    }
+
+    // 개발 환경: scripts/bundle
+    let cwd = std::env::current_dir().ok()?;
+    let dev_bundle = cwd.join("scripts/bundle");
+    if dev_bundle.exists() {
+        return dev_bundle.canonicalize().ok();
+    }
+
+    let dev_bundle2 = cwd.join("../scripts/bundle");
+    if dev_bundle2.exists() {
+        return dev_bundle2.canonicalize().ok();
+    }
+
+    None
+}
+
+fn find_node() -> Option<PathBuf> {
+    // 번들된 node 우선
+    if let Some(bundle_dir) = find_bundle_dir() {
+        let bundled_node = bundle_dir.join("node/bin/node");
+        if bundled_node.exists() {
+            return Some(bundled_node);
+        }
+    }
+
+    // 시스템 node 폴백
+    let candidates = [
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+        "/opt/local/bin/node",
+    ];
+
+    for path in candidates {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
 #[derive(Error, Debug)]
 pub enum PlaywrightError {
     #[error("워커 시작 실패: {0}")]
@@ -19,6 +72,8 @@ pub enum PlaywrightError {
     NotRunning,
     #[error("스크립트를 찾을 수 없습니다")]
     ScriptNotFound,
+    #[error("Node.js를 찾을 수 없습니다")]
+    NodeNotFound,
 }
 
 #[derive(Serialize)]
@@ -54,32 +109,24 @@ impl PlaywrightWorker {
     }
 
     fn find_script_and_workdir() -> Option<(PathBuf, PathBuf)> {
-        let cwd = std::env::current_dir().ok()?;
-
-        let exe_path = std::env::current_exe().ok()?;
-        let exe_dir = exe_path.parent()?;
-
-        if let Ok(script_path) = std::env::var("HIWORKS_WORKER_SCRIPT") {
-            let path = PathBuf::from(&script_path);
-            if path.exists() {
-                let workdir = path.parent()?.parent()?.to_path_buf();
-                return Some((path.canonicalize().ok()?, workdir.canonicalize().ok()?));
+        // 번들 디렉토리 우선
+        if let Some(bundle_dir) = find_bundle_dir() {
+            let script = bundle_dir.join("playwright-worker.js");
+            if script.exists() {
+                return Some((script, bundle_dir));
             }
         }
 
-        let mut candidates = vec![
-            (cwd.join("../scripts/playwright-worker.js"), cwd.join("..")),
-            (cwd.join("scripts/playwright-worker.js"), cwd.clone()),
-            (exe_dir.join("../Resources/scripts/playwright-worker.js"), exe_dir.join("../Resources")),
-            (exe_dir.join("scripts/playwright-worker.js"), exe_dir.to_path_buf()),
-        ];
+        // 개발 환경 폴백
+        let cwd = std::env::current_dir().ok()?;
+        let exe_path = std::env::current_exe().ok()?;
+        let exe_dir = exe_path.parent()?;
 
-        if let Ok(home) = std::env::var("HOME") {
-            candidates.push((
-                PathBuf::from(&home).join(".hiworks-commute/scripts/playwright-worker.js"),
-                PathBuf::from(&home).join(".hiworks-commute"),
-            ));
-        }
+        let candidates = vec![
+            (cwd.join("scripts/playwright-worker.js"), cwd.join("scripts")),
+            (cwd.join("../scripts/playwright-worker.js"), cwd.join("../scripts")),
+            (exe_dir.join("../Resources/scripts/playwright-worker.js"), exe_dir.join("../Resources/scripts")),
+        ];
 
         for (script, workdir) in candidates {
             if script.exists() {
@@ -98,13 +145,24 @@ impl PlaywrightWorker {
         let (script_path, work_dir) =
             Self::find_script_and_workdir().ok_or(PlaywrightError::ScriptNotFound)?;
 
-        let mut child = Command::new("node")
-            .arg(&script_path)
+        let node_path = find_node().ok_or(PlaywrightError::NodeNotFound)?;
+
+        let mut cmd = Command::new(&node_path);
+        cmd.arg(&script_path)
             .current_dir(&work_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+            .stderr(Stdio::inherit());
+
+        // 번들된 브라우저 경로 설정
+        if let Some(bundle_dir) = find_bundle_dir() {
+            let browsers_path = bundle_dir.join("browsers");
+            if browsers_path.exists() {
+                cmd.env("PLAYWRIGHT_BROWSERS_PATH", &browsers_path);
+            }
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdin = child.stdin.take().expect("Failed to get stdin");
         let stdout = child.stdout.take().expect("Failed to get stdout");
