@@ -1,0 +1,22 @@
+{
+  "name": "hiworks-commute",
+  "version": "0.1.0",
+  "description": "Hiworks 출퇴근 macOS Status Bar 앱",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "serve": "npx serve src -l 1420",
+    "playwright": "node scripts/playwright-worker.js"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "serve": "^14.0.0",
+    "sharp": "^0.34.5"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "playwright": "^1.50.0"
+  }
+}
