@@ -22,6 +22,9 @@ npm-debug.log*
 dist/
 build/
 
+# Playwright browsers
+scripts/bundle/
+
 # Environment
 .env
 .env.local
